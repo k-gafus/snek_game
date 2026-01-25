@@ -4,14 +4,14 @@ List of things "To Do" or to consider in unorderly manner:
 [] Put together "Menu" system (Maybe as last thing ?)
 [] Solidify FSM logic
 [] Implement better timers? instead of using "sleep" - research needed
-[] Make "World" class handle all collisions
-[] Refactor "Border" class
-[] Re-implement "Target" consumption logic with "Target" staying ignorant
-[] Refine all "Game Over" conditions and events related to it (Do I need this with
+[x] Make "World" class handle all collisions
+[x] Refactor "Border" class
+[x] Re-implement "Target" consumption logic with "Target" staying ignorant
+[x] Refine all "Game Over" conditions and events related to it (Do I need this with
    with "World" class present?)
 [x] Create "Joystick" class and move it's function there ?
-[] Implement proper "Score" handler
-[] Implement additional buttons for "Menu" and/or "Reset"?
+[x] Implement proper "Score" handler
+[x] Implement additional buttons for "Menu" and/or "Reset"?
 [x] Fix snek vs food interaction (coordinate mismatch)
 [x] Joystick Timer?
 """
@@ -48,6 +48,7 @@ class Game_State:
             Game_States.GAME_OVER: None
         }
 
+    # Is this even needed?
     def event_handler(self, event):
         next_state = transitions[self.state].get(event)
         if next_state is not None:
@@ -55,6 +56,49 @@ class Game_State:
             self.actions[self.state]()
         else:
             print("State was not found")
+
+    def current_state(self):
+        print(self.state)
+
+"""
+Game Manager:
+1. Starts in State GAME_MENU
+2. If joy_btn pressed -> State RUNNING (May change later, if more options added)
+3. While playing, if button pressed -> Game is PAUSED (Need additional btn)
+    3.1 Under PAUSED 2? options to Continue or Restart?
+    3.2 Continue -> RUNNING / Restart -> Starts game from 0 points
+4. When collision happens -> GAME_OVER
+    4.1 What options? Main menu / Restart? (Main menu only makes sense if there are
+        additional options to change. ex. Play with border or without)
+
+Can this be wrapped in some sort of transitions map?
+GAME_MENU -> Button press -> RUNNING
+RUNNING -> Button press -> PAUSED
+RUNNING -> Collision = True -> GAME_OVER
+PAUSED -> Button pressed -> RUNNING
+PAUSED -> Button pressed -> RESTART?
+GAME_OVER -> Button pressed -> RESTART
+GAME_OVER -> Button pressed -> MAIN_MENU?
+
+This transitions map would serve to point, which State is currently active and
+depending on it, execute specific block of code within main while loop.
+"""
+
+state_transitions = {
+    Game_States.GAME_MENU = {
+        "btn_press": Game_States.RUNNING
+    },
+    Game_States.RUNNING = {
+        "btn_press": Game_States.PAUSED
+        "collision": Game_States.GAME_OVER
+    },
+    Game_States.PAUSED = {
+        "btn_press": Game_States.RUNNING
+    },
+    Game_States.GAME_OVER = {
+        "btn_press": Game_States.GAME_MENU
+    }
+}
 
 ######### GAME STATE FUNCTIONS TEMPORARY LOCATION #########
 def draw_menu(display):
@@ -73,20 +117,15 @@ def draw_menu(display):
 
     display.fill_rect(35, 38, 3, 3, 1)
 
-###########################################################
-
-
-# ---- State Transitions Map ----
-# transitions = {}
-# ---- Event Handlers ----
-# def snek_handler():
-
 #######################
 # ---- Constants ---- #
 #######################
 JOY_X_PIN = 26
 JOY_Y_PIN = 27
-JOY_BTN_PIN = 22
+JOY_BTN_PIN = 22 # For handling Menu options
+
+BTN_RESET = 4 # For "hard reset"? 
+BTN_MENU = 5 # For toggling Menu / Pause
 
 DISPLAY_SDA = 0
 DISPLAY_SCL = 1
@@ -102,6 +141,9 @@ BODY_SIZE = 2
 joy_x = ADC(JOY_X_PIN)
 joy_y = ADC(JOY_Y_PIN)
 joy_btn = Pin(JOY_BTN_PIN, Pin.IN, Pin.PULL_UP)
+
+btn_reset = Pin(BTN_RESET, Pin.IN, Pin.PULL_UP)
+btn_menu = Pin(BTN_MENU, Pin.IN, Pin.PULL_UP)
 
 i2c = I2C(0, sda=Pin(DISPLAY_SDA), scl=Pin(DISPLAY_SCL), freq=400000)
 
@@ -168,30 +210,23 @@ class Snek_Body:
         # Replaces "whole display" refreshing
         if self.a is not None:
             display.fill_rect(self.a, self.b, BODY_SIZE, BODY_SIZE, 0)
-        
-    def body_collision(self):
-        head = self.segments[0]
-        body = self.segments[1:]
-        if head in body:
-            # Checks if snake head has collided with it's body
-            print("Self-Collision has occurred")
-            return True
-        return False
 
 class Snek_Control:
-    def __init__(self, starting_x=0, starting_y=0, max_x=128, max_y=64):
+    def __init__(self, starting_x=0, starting_y=0):
         self.x = starting_x
         self.y = starting_y
         self.dx = BODY_SIZE
         self.dy = 0
-        self.max_x = max_x
-        self.max_y = max_y
+        # self.max_x = max_x
+        # self.max_y = max_y
+        self.max_x = DISPLAY_WIDTH
+        self.max_y = DISPLAY_HEIGHT
         self.vector_dict = {
-        "left": (-BODY_SIZE, 0),
-        "right": (BODY_SIZE, 0),
-        "up": (0, -BODY_SIZE),
-        "down": (0, BODY_SIZE)
-    }
+            "left": (-BODY_SIZE, 0),
+            "right": (BODY_SIZE, 0),
+            "up": (0, -BODY_SIZE),
+            "down": (0, BODY_SIZE)
+        }
    
     @staticmethod
     def vector_swap(ctrl, direction):
@@ -218,95 +253,85 @@ class Obstacle:
         display.fill_rect(self.inner_offset, self.inner_offset, self.inner_x, self.inner_y, 0)
 
 class Target:
-    def __init__(self, obstacle):
-        self.bounds = obstacle
+    def __init__(self): # Used to have obstacle as variable
+        # self.bounds = obstacle
         self.rand_x = 0
         self.rand_y = 0
-        self.min_x = self.bounds.inner_offset + 1
-        self.max_x = self.bounds.inner_x - BODY_SIZE
-        self.min_y = self.bounds.inner_offset + 1
-        self.max_y = self.bounds.inner_y - BODY_SIZE
+        # self.min_x = self.bounds.inner_offset + 1
+        # self.max_x = self.bounds.inner_x - BODY_SIZE
+        # self.min_y = self.bounds.inner_offset + 1
+        # self.max_y = self.bounds.inner_y - BODY_SIZE
         self.exists = False
     
-    # Randomizes coordinates of Target within "Game Field" bounds
-    def randomizer(self):
-        # Checks if instance of target/food exists
-        if not self.exists:
-            self.rand_x = random.randrange(self.min_x, self.max_x, BODY_SIZE)
-            self.rand_y = random.randrange(self.min_y, self.max_y, BODY_SIZE)
-            self.exists = True
+    # # Randomizes coordinates of Target within "Game Field" bounds
+    # def randomizer(self):
+    #     # Checks if instance of target/food exists
+    #     if not self.exists:
+    #         self.rand_x = random.randrange(self.min_x, self.max_x, BODY_SIZE)
+    #         self.rand_y = random.randrange(self.min_y, self.max_y, BODY_SIZE)
+    #         self.exists = True
     
     def target_draw(self, display):  
         display.fill_rect(self.rand_x, self.rand_y, BODY_SIZE, BODY_SIZE, 1)
 
-class Game_Over:
-    # Code for Game Over conditions
-    def __init__(self, controller, border):
-        self.ctrl = controller
-        self.border = border
-    
-    def border_collision(self):
-        snek_head_x = self.ctrl.x
-        snek_head_y = self.ctrl.y
-        border_x_max = self.border.inner_x + self.border.inner_offset
-        border_y_max = self.border.inner_y + self.border.inner_offset
-        border_zero = self.border.inner_offset
-        
-        if (snek_head_x > border_x_max or snek_head_x < border_zero
-        or snek_head_y > border_y_max or snek_head_y < border_zero):
-            print(f"Collision with border has occurred at x: \
-            {snek_head_x} and y: {snek_head_y}")
-            return True
-        return False
-
 # Game Referee
-class World: # The all knowing
-    """
-    Purpose of this class could be to seperate all objects, make them as "dumb"
-    as I can (within limits of my current knowladge). So that if I decide to add 
-    something like "obstacles" class, I suddenly don't have to worry about re-writing
-    Target class in order to avoid from it spawning on the occupied pixels.
-    """
+class World:
     def __init__(self, snek_body, obstacle, target):
         self.snek_body = snek_body
         self.obstacle = obstacle
         self.target = target
 
-        self.collision_detected = False
+    def update(self):
+        """
+        Returns True if the game should continue, False if a collision happened.
+        """
+        # 1. Check if coordinates for target are valid
+        if self.target.exists == False:
+            self._rand_target_pos()
 
-    def target_check(self):
+        # 2. Check if we ate food ('Good' collision)
+        self._check_target()
+
+        # 3. Check for 'Bad' collisions
+        if self._check_collision():
+            return False
+        return True
+
+    # Randomizes coordinates of Target within "Game Field" bounds
+    def _rand_target_pos(self):
+        min_x = self.obstacle.inner_offset + 1
+        max_x = self.obstacle.inner_x - BODY_SIZE
+        min_y = self.obstacle.inner_offset + 1
+        max_y = self.obstacle.inner_y - BODY_SIZE
+        # Checks if instance of target/food exists
+        if not self.target.exists:
+            self.target.rand_x = random.randrange(min_x, max_x, BODY_SIZE)
+            self.target.rand_y = random.randrange(min_y, max_y, BODY_SIZE)
+            self.target.exists = True
+
+    def _check_target(self):
         head_pos = self.snek_body.segments[0]
-        target_pos = (self.target.rand_x, self.target.rand_y)
-        # print(head_pos, " ", target_pos)
-
-        if head_pos == target_pos:
-            print(f"Target was consumed at: {head_pos}, {target_pos}")
+        if head_pos == (self.target.rand_x, self.target.rand_y):
+            print(f"Target was consumed at: {head_pos}, {(self.target.rand_x, self.target.rand_y)}")
             self.target.exists = False
             self.snek_body.length += 1
+            score.update(display_obj)
 
-    def _collision_check(self):
-        head_pos_x, head_pos_y = self.snek_body.segment[0]
-        body_pos_xy = self.segments[1:]
-        border_x_max = self.border.inner_x + self.border.inner_offset
-        border_y_max = self.border.inner_y + self.border.inner_offset
-        border_zero = self.border.inner_offset
+    def _check_collision(self):
+        head_x, head_y = self.snek_body.segments[0]
         
-        # Checking Obstacle collision: head vs obstacle
-        if (head_pos_x > border_x_max or head_pos_x < border_zero
-        or head_pos_y > border_y_max or head_pos_y < border_zero):
-            print(f"Collision with border has occurred at x: \
-            {snek_head_x} and y: {snek_head_y}")
-            self.collision_detected = True
+        # Obstacle checks
+        if (head_x >= self.obstacle.inner_x or head_x < self.obstacle.inner_offset or
+            head_y >= self.obstacle.inner_y or head_y < self.obstacle.inner_offset):
+            print("Collision with obstacle has occurred")
+            return True
         
-        # Checking self-body collision: head vs body
-        elif head in body:
-            print("SelfCollision has occurred")
-            self.collision_detected = True
-
-    def collision_event(self):
-        return self.collision_detected
-
-
+        # Self-collision check
+        if self.snek_body.segments[0] in self.snek_body.segments[1:]:
+            print("Self collision has occurred")
+            return True
+            
+        return False
 
 #######################
 # ---- Functions ---- #
@@ -322,28 +347,6 @@ def display_update():
     display_obj.text("Snek v1.0", 20, 32, 1)
     display_obj.show()
 
-def display_state(switch):
-    if switch.value() == 0:
-        display_obj.poweron()
-        print("Display is ON")
-    
-    if switch.value() == 1:
-        display_obj.poweroff()
-        print("Display is OFF")
-
-# def get_joystick_event():
-#     raw_x = joy_x.read_u16() - 32759 # To offset joystick values
-#     raw_y = joy_y.read_u16() - 32759
-#     joy_default_negative = 500 # To account for joystick "dead zone"
-#     joy_default_positive = -500
-    
-#     if raw_x > joy_default_negative: return Joystick_Events.LEFT
-#     if raw_x < joy_default_positive: return Joystick_Events.RIGHT
-#     if raw_y > joy_default_negative: return Joystick_Events.UP
-#     if raw_y < joy_default_positive: return Joystick_Events.DOWN
-    
-#     return None
-
 ###########################
 # ---- Class Objects ---- #
 ###########################
@@ -351,10 +354,10 @@ snek_control = Snek_Control(starting_x=10, starting_y=26)
 snek_body = Snek_Body(snek_control)
 obstacle = Obstacle(outter_x=128, outter_y=55, inner_x=126,
                 inner_y=52, outter_offset=0, inner_offset=1)
-game_over = Game_Over(snek_control, obstacle)
-target = Target(obstacle) # Used to have snek_body as variable
+target = Target() # Used to have snek_body and obstacle as variables
 world = World(snek_body, obstacle, target)
 joystick_obj = Joystick(JOY_X_PIN, JOY_Y_PIN)
+game_state = Game_State()
 
 #########################
 # ---- Actions Map ---- #
@@ -375,46 +378,65 @@ display_obj = ssd1306.SSD1306_I2C(DISPLAY_WIDTH, DISPLAY_HEIGHT, i2c, addr=DISPL
 #######################
 # ---- Main Loop ---- #
 #######################
-# display_obj.poweroff()
-switch = Pin(13, Pin.IN, Pin.PULL_UP)
-last_switch_state = None
-testing_target = False
 random.seed(joy_x.read_u16() + joy_y.read_u16() + ticks_us())
 
-############################################
-#### TESTING / WORKING ON NEW RENDERING ####
-############################################
+#########################################
+#### TESTING / WORKING ON NEW THINGS ####
+#########################################
 
 display_obj.fill(0) # Clears display once at the start
 obstacle.draw(display_obj) # Draws border once at the start
 
-# If I implement these, I assume I can print them once before the loop and then
-# set up something to check, if I have hit the Target, for score update to happen
-display_obj.text("Score", 0, 57, 1)
-display_obj.text("00001", 90, 57, 1)
+class Score:
+    def __init__(self):
+        self.counter = -00001 # Had to offset score by 1
+                              # Unless I come up with better solution later
+    def update(self, display):
+        self._counter_up()
+        # display.fill_rect(90, 57, 38, 9, 0)
+        display.fill_rect(0, 57, 128, 9, 0) # Should I use one block or 2 lesser ones
+        display.text("Score", 0, 57, 1)
+        display.text(f"{self.counter:05d}", 88, 57, 1)
+
+    def _counter_up(self):
+        self.counter += 1
+
+score = Score()
+score.update(display_obj) # Render score once, before the main loop
+
+# def score():
+#     test = 00000
+#     display_obj.text("Score", 0, 57, 1)
+#     display_obj.text(str(test), 90, 57, 1)
+#     test += 1
+
+# score()
 
 while True:
     #### FOR TESTING PURPOSES ####
-    world.target_check()
     # draw_menu(display_obj)
     # display_obj.show()
     #################
 
-    # 1. Inputs
-    # event = get_joystick_event()
-    event = joystick_obj.get_event()
-    if event in actions: actions[event]()
+    # # 1. Inputs
+    # # event = get_joystick_event()
+    # event = joystick_obj.get_event()
+    # if event in actions: actions[event]()
    
-    # 2. Logic
-    snek_control.update_pos()
-    snek_body.update()  # Handle the list logic
-    game_over.border_collision() # Could potentially move this to World class ?
-    target.randomizer() # Should be calculated internally 
+    # # 2. Logic
+    # snek_control.update_pos()
+    # snek_body.update()  # Handle the list logic
+    # world.update()
+    # # target.randomizer() # Should be calculated internally
    
-    # 3. Render
-    target.target_draw(display_obj)
-    snek_body.draw(display_obj) # Handle the drawing logic
-    display_obj.show()
-    snek_body.body_collision() # Should go to World class
+    # # 3. Render
+    # target.target_draw(display_obj)
+    # snek_body.draw(display_obj) # Handle the drawing logic
+    # display_obj.show()
 
-    sleep(0.25) # "Speed" testing
+    # sleep(0.25) # "Speed" testing
+
+    if game_state.state == game_menu:
+        draw_menu(display_obj)
+    
+    # game_state.current_state()
